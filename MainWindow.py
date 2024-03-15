@@ -1,9 +1,11 @@
 import sys
 import pandas as pd
 from PyQt5 import QtWidgets, QtGui, QtCore
-from PyQt5.QtWidgets import QFileDialog, QProgressBar, QMessageBox
+from PyQt5.QtWidgets import QFileDialog, QProgressBar, QMessageBox, QDesktopWidget, QWidget
+
 from DatabaseHandler import DatabaseHandler
 from Converter import ExcelConverter
+
 
 class WorkerThread(QtCore.QThread):
     progress_updated = QtCore.pyqtSignal(int)
@@ -17,7 +19,7 @@ class WorkerThread(QtCore.QThread):
         converter = ExcelConverter()
 
         try:
-            df_excel = pd.read_excel(self.file_path, sheet_name=None, skiprows=4)
+            df_excel = pd.read_excel(self.file_path, sheet_name=None)
             db_handler = DatabaseHandler()
 
             total_sheets = len(df_excel)
@@ -25,14 +27,21 @@ class WorkerThread(QtCore.QThread):
 
             for sheet_name, df in df_excel.items():
                 df = df.dropna(axis=1, how='all')
+                df = df.dropna(axis=0, how='all')
                 if df.empty:
+                    self.progress_updated.emit(int((processed_sheets / total_sheets) * 100))
                     continue
 
                 try:
+                    df.columns = df.iloc[0]
+                    df = df[1:]
+
                     converted_data = converter.convert_to_dataframe(df)
                     db_handler.insert_data(sheet_name, converted_data)
                 except Exception as e:
-                    print(f"Error processing {sheet_name}: {str(e)}")
+                    error_message = f"Error processing {sheet_name}: {str(e)}"
+                    print(error_message)
+                    QMessageBox.critical(None, "Error", error_message)
 
                 processed_sheets += 1
                 progress_value = int((processed_sheets / total_sheets) * 100)
@@ -42,8 +51,11 @@ class WorkerThread(QtCore.QThread):
             self.conversion_finished.emit(True)
 
         except Exception as e:
-            print(f"Error reading or processing Excel file: {str(e)}")
+            error_message = f"Error reading or processing Excel file: {str(e)}"
+            print(error_message)
+            QMessageBox.critical(None, "Error", error_message)
             self.conversion_finished.emit(False)
+
 
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
@@ -65,6 +77,7 @@ class MainWindow(QtWidgets.QWidget):
         self.convert_button = QtWidgets.QPushButton('Convert', self)
         self.convert_button.setGeometry(10, 50, 80, 30)
         self.convert_button.clicked.connect(self.start_conversion)
+        self.convert_button.setEnabled(False)  # Initially disable the button
 
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setGeometry(10, 90, 390, 20)
@@ -78,11 +91,12 @@ class MainWindow(QtWidgets.QWidget):
 
         if file_name:
             self.file_path_line_edit.setText(file_name)
+            self.convert_button.setEnabled(True)  # Enable the button when a file is chosen
             self.reset_progress_bar()
 
     def start_conversion(self):
         file_path = self.file_path_line_edit.text()
-        self.convert_button.setEnabled(False)
+        self.convert_button.setEnabled(False)  # Disable the button when conversion starts
 
         self.worker_thread = WorkerThread(file_path)
         self.worker_thread.progress_updated.connect(self.update_progress)
@@ -93,7 +107,7 @@ class MainWindow(QtWidgets.QWidget):
         self.progress_bar.setValue(value)
 
     def conversion_finished(self, success):
-        self.convert_button.setEnabled(True)
+        self.convert_button.setEnabled(True)  # Enable the button when conversion finishes
 
         if success:
             QMessageBox.information(self, "Success", "Conversion successful!")
@@ -102,6 +116,7 @@ class MainWindow(QtWidgets.QWidget):
 
     def reset_progress_bar(self):
         self.progress_bar.setValue(0)
+
 
 def run_main_window():
     app = QtWidgets.QApplication(sys.argv)
